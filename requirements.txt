@@ -1,0 +1,46 @@
+# Core
+python-dotenv==1.0.1
+pydantic==2.9.0
+pyyaml==6.0.2
+rich==13.9.2
+tenacity==9.0.0
+
+# LLM
+langchain==0.3.7
+langchain-groq==0.2.1
+langchain-community==0.3.5
+groq==0.11.0
+
+# Voice - Wake Word
+openwakeword==0.6.0
+
+# Voice - STT
+faster-whisper==1.0.3
+
+# Voice - TTS
+edge-tts==6.1.12
+
+# Audio I/O
+sounddevice==0.5.0
+pyaudio==0.2.14
+numpy==1.26.4
+scipy==1.14.1
+
+# Vision
+pillow==10.4.0
+mss==9.0.1
+
+# Memory
+chromadb==0.5.15
+sentence-transformers==3.2.1
+
+# Tools
+requests==2.32.3
+psutil==6.0.0
+pyautogui==0.9.54
+
+# UI
+streamlit==1.39.0
+
+# Utils
+beautifulsoup4==4.12.3

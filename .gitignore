@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Env
+.env
+venv/
+env/
+.venv/
+
+# Data
+data/audio/*
+data/memory/*
+data/screenshots/*
+!data/audio/.gitkeep
+!data/memory/.gitkeep
+!data/screenshots/.gitkeep
+
+# Models (downloaded)
+models/*
+!models/.gitkeep
+
+# Logs
+logs/*.log
+!logs/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local
+hinglish_readme.md
