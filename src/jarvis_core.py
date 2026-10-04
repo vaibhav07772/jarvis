@@ -1,7 +1,8 @@
-"""JARVIS — Full voice loop with tool calling"""
+"""JARVIS — Full voice loop with tool calling + memory"""
 import os
 import sys
 import json
+import re
 import time
 import numpy as np
 import sounddevice as sd
@@ -21,6 +22,9 @@ from groq import Groq
 # Tools
 from src.tools.jarvis_tools import TOOLS_SCHEMA, execute_tool
 
+# Memory
+from src.memory.jarvis_memory import JarvisMemory
+
 load_dotenv()
 console = Console()
 
@@ -28,11 +32,11 @@ console = Console()
 # Config
 # ─────────────────────────────────────────
 WAKE_WORD_MODEL = "hey_jarvis"
-WAKE_THRESHOLD = 0.3  # Lower threshold
+WAKE_THRESHOLD = 0.3
 WHISPER_MODEL = "tiny"
 LLM_MODEL = "openai/gpt-oss-120b"
 TTS_VOICE = "en-GB-RyanNeural"
-DEVICE_ID = 2  # TWS headset
+DEVICE_ID = 2
 AUDIO_DIR = Path("data/audio")
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -48,11 +52,12 @@ Rules:
 - Speak naturally — your response will be converted to speech
 - Use tools when needed (weather, time, math, search, system info)
 - If asked something you can't do, say so briefly
+- Remember context from memory when provided
 """
 
 
 class Jarvis:
-    """Full voice assistant with tools"""
+    """Full voice assistant with tools + memory"""
 
     def __init__(self):
         console.print("[cyan]🔧 Initializing JARVIS...[/cyan]")
@@ -84,6 +89,10 @@ class Jarvis:
             sys.exit(1)
         self.llm = Groq(api_key=api_key)
 
+        # ─── Memory ───
+        console.print("   [dim]Loading memory...[/dim]")
+        self.memory = JarvisMemory()
+
         # ─── History ───
         self.history = [
             {"role": "system", "content": SYSTEM_PROMPT}
@@ -92,10 +101,9 @@ class Jarvis:
         console.print("[green]✅ JARVIS ready[/green]")
 
     # ─────────────────────────────
-    # Resample helper
+    # Resample
     # ─────────────────────────────
     def _resample_to_16k(self, audio):
-        """Resample audio from native_rate to 16000 Hz"""
         if self.native_rate == 16000:
             return audio
         ratio = self.native_rate / 16000
@@ -110,18 +118,13 @@ class Jarvis:
     # Wake Word
     # ─────────────────────────────
     def wait_for_wake_word(self):
-        console.print("\n[dim]👂 Listening for 'Hey Jarvis'... (Say it loudly)[/dim]")
+        console.print("\n[dim]👂 Listening for 'Hey Jarvis'...[/dim]")
         detected = {"flag": False, "max_score": 0.0}
-
-        # Block size = 80 ms chunks at native rate
         block_size = int(self.native_rate * 0.08)
 
         def callback(indata, frames, time_info, status):
             audio = (indata[:, 0] * 32767).astype(np.int16)
-
-            # Resample to 16kHz
             audio = self._resample_to_16k(audio)
-
             prediction = self.wake_model.predict(audio)
             score = prediction.get(WAKE_WORD_MODEL, 0.0)
 
@@ -149,12 +152,10 @@ class Jarvis:
         self.wake_model.reset()
 
     # ─────────────────────────────
-    # Record Audio
+    # Record
     # ─────────────────────────────
     def record_audio(self, duration=5):
         console.print(f"[cyan]🎤 Recording {duration}s...[/cyan]")
-
-        # Record at native rate
         audio = sd.rec(
             int(duration * self.native_rate),
             samplerate=self.native_rate,
@@ -163,13 +164,8 @@ class Jarvis:
             device=DEVICE_ID,
         )
         sd.wait()
-
-        # Convert to float32
         audio = audio.flatten().astype(np.float32) / 32768.0
-
-        # Resample to 16kHz for Whisper
         audio = self._resample_to_16k(audio).astype(np.float32)
-
         return audio
 
     # ─────────────────────────────
@@ -185,15 +181,55 @@ class Jarvis:
         return " ".join(seg.text.strip() for seg in segments).strip()
 
     # ─────────────────────────────
-    # LLM + Tool Calling
+    # Fact extraction
+    # ─────────────────────────────
+    def _extract_facts(self, user_text):
+        text_lower = user_text.lower()
+
+        # Name
+        match = re.search(r"(?:my name is|i am|i'm)\s+([A-Z][a-z]+)", user_text)
+        if match:
+            name = match.group(1)
+            if self.memory.get_fact("name") != name:
+                self.memory.save_fact("name", name)
+
+        # City
+        match = re.search(r"(?:i live in|i'm from)\s+([A-Z][a-z]+)", user_text)
+        if match:
+            city = match.group(1)
+            if self.memory.get_fact("city") != city:
+                self.memory.save_fact("city", city)
+
+        # Favorites
+        match = re.search(r"my favorite (\w+) is ([\w\s]+)", text_lower)
+        if match:
+            category, value = match.groups()
+            key = f"favorite_{category}"
+            self.memory.save_fact(key, value.strip())
+
+    # ─────────────────────────────
+    # LLM + Tool Calling + Memory
     # ─────────────────────────────
     def get_response(self, user_text):
         console.print("[cyan]🧠 Thinking...[/cyan]")
 
-        self.history.append({"role": "user", "content": user_text})
-        messages = [self.history[0]] + self.history[-10:]
+        # ─── Memory context ───
+        memory_context = self.memory.get_context_for_llm(user_text)
 
-        # First LLM call — may request tools
+        # ─── Build messages ───
+        self.history.append({"role": "user", "content": user_text})
+
+        messages = [self.history[0]]
+
+        if memory_context:
+            messages.append({
+                "role": "system",
+                "content": f"Context from memory:\n{memory_context}",
+            })
+
+        messages += self.history[-10:]
+
+        # ─── First LLM call ───
         response = self.llm.chat.completions.create(
             model=LLM_MODEL,
             messages=messages,
@@ -212,7 +248,6 @@ class Jarvis:
         while message.tool_calls and iteration < max_iter:
             iteration += 1
             console.print(f"[yellow]🔧 Using tool(s)...[/yellow]")
-
             messages.append(message)
 
             for tool_call in message.tool_calls:
@@ -232,7 +267,6 @@ class Jarvis:
                     "content": result,
                 })
 
-            # Ask LLM again with tool results
             response = self.llm.chat.completions.create(
                 model=LLM_MODEL,
                 messages=messages,
@@ -248,6 +282,11 @@ class Jarvis:
             reply = "I'm not sure how to respond to that, sir."
 
         self.history.append({"role": "assistant", "content": reply})
+
+        # ─── Save to memory ───
+        self.memory.save_conversation(user_text, reply)
+        self._extract_facts(user_text)
+
         return reply
 
     # ─────────────────────────────
